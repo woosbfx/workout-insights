@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg
+*.egg-info/
+dist/
+build/
+.env
+*.env
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# Jupyter Notebook Checkpoints
+.ipynb_checkpoints/
+
+# VSCode / PyCharm / other IDE settings
+.vscode/
+.idea/
+*.swp
+
+# macOS
+.DS_Store
+
+# CSV and JSON files
+*.csv
+*.json
+*.jsonl
+
+# Streamlit cache
+.streamlit/config.toml
+.streamlit/secrets.toml
+
+# OpenAI output or logs
+openai_logs/
+*.log
+
+# Docker
+.env
+.env.*
+*.db
+*.pid
+docker-compose.override.yml
+__docker_cache__/
+
+# Streamlit .data (if used)
+.data/
+
+# Custom
+env/
+analysis_output.csv
+strong.csv
+body_part_map.json
