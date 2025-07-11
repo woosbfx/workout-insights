@@ -4,8 +4,49 @@ import altair as alt
 from dotenv import load_dotenv
 import os
 from openai import OpenAI
+import boto3
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+session = boto3.Session(
+    aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+    aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+    region_name=os.getenv("AWS_REGION", "eu-west-2")
+)
+
+s3 = session.client("s3")
+lambda_client = session.client("lambda")
+
+
+def upload_file_to_s3(file, bucket_name, object_name):
+    try:
+        s3.upload_fileobj(file, bucket_name, object_name)
+        return True
+    except Exception as e:
+        st.error(f"❌ Upload failed: {e}")
+        return False
+
+def invoke_lambda():
+    try:
+        response = lambda_client.invoke(
+            FunctionName="processWorkoutCSV",  # Your actual Lambda function name
+            InvocationType="RequestResponse"
+        )
+        return response
+    except Exception as e:
+        st.error(f"❌ Failed to invoke Lambda: {e}")
+        return None
+
+def check_processed_file_exists(bucket, key):
+    try:
+        s3.head_object(Bucket=bucket, Key=key)
+        return True
+    except s3.exceptions.ClientError:
+        return False
+
+def load_analysis_csv_from_s3(bucket: str, key: str) -> pd.DataFrame:
+    obj = s3.get_object(Bucket=bucket, Key=key)
+    return pd.read_csv(obj["Body"])
 
 
 # --- Sidebar Navigation ---
@@ -23,19 +64,60 @@ if page == "Home":
 
     - 📊 Analyze progress
     - 📈 Visualize volume & intensity
-    - 🗂 Upload CSVs from Strong or other apps
+    - 🗂 Upload CSVs from Strong
     """)
 
 elif page == "Upload CSV":
-    uploaded_file = st.file_uploader("Upload your Strong .csv export", type="csv")
+    st.header("📤 Upload your Strong CSV")
+
+    uploaded_file = st.file_uploader("Choose your `strong.csv` file", type="csv")
+
     if uploaded_file:
-        df = pd.read_csv(uploaded_file)
-        st.write("Data preview:", df.head())
+        bucket_name = "portfolio-workout-app"
+        raw_key = "uploads/strong.csv"
+        processed_key = "processed/analysis_output.csv"
+
+        if st.button("Upload and Process"):
+            with st.spinner("📤 Uploading to S3..."):
+                success = upload_file_to_s3(uploaded_file, bucket_name, raw_key)
+
+            if success:
+                st.success("✅ File uploaded successfully!")
+
+                with st.spinner("⚙️ Triggering Lambda to process data..."):
+                    response = invoke_lambda()
+
+                if response:
+                    st.success("✅ Lambda invoked successfully!")
+                    st.info("⏳ Waiting for processed file to appear...")
+
+                    # Poll S3 for processed output
+                    max_wait = 30  # seconds
+                    poll_interval = 3
+                    elapsed = 0
+                    file_found = False
+
+                    while elapsed < max_wait:
+                        if check_processed_file_exists(bucket_name, processed_key):
+                            file_found = True
+                            break
+                        time.sleep(poll_interval)
+                        elapsed += poll_interval
+
+                    if file_found:
+                        st.success("✅ Processed file is ready! You can now view your trends in the Workout Trends page.")
+                    else:
+                        st.warning("⚠️ Timed out waiting for processed file. Please check back later.")
+
 
 elif page == "Workout Trends":
     # --- Load and prep data ---
     try:
-        df = pd.read_csv("env/analysis_output.csv")
+        df = load_analysis_csv_from_s3(
+            bucket="portfolio-workout-app",
+            key="processed/analysis_output.csv"
+        )
+
     except FileNotFoundError:
         st.warning("No workout data found. Upload a CSV first.")
         st.stop()
@@ -87,14 +169,12 @@ elif page == "Workout Trends":
     selected_filter = st.selectbox("Choose one", filter_list)
     df = df[df[selected_group] == selected_filter]
 
-    # --- Prepare for chart ---
-    df["exercise"] = 1  # for averaging RPE
 
     grouped_df = (
         df.groupby([date_col, selected_group])
         .agg({
             selected_metric: "sum",
-            "exercise": "sum"  # used only for RPE
+            "sets": "sum"
         })
         .reset_index()
         .rename(columns={
@@ -103,10 +183,12 @@ elif page == "Workout Trends":
         })
     )
 
+
     if selected_metric == "sum_rpe":
-        grouped_df["metric_value"] = grouped_df[selected_metric] / grouped_df["exercise"]
+        grouped_df["metric_value"] = grouped_df[selected_metric] / grouped_df["sets"]
     else:
         grouped_df["metric_value"] = grouped_df[selected_metric]
+
 
     # --- Chart ---
     st.markdown(f"### 📈 {selected_metric_label} Over Time ({date_grouping})")

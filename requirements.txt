@@ -6,3 +6,4 @@ numpy
 duckdb
 openai
 python-dotenv
+boto3
